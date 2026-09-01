@@ -2,7 +2,7 @@
 
 A lightweight, zero-dependency PowerShell tool to relocate and fix installation paths or drive letters for PC games without re-downloading them.
 
-Supports **Epic Games Launcher**, **Ubisoft Connect (Uplay)**, and **Rockstar Games Launcher**.
+Supports **Epic Games Launcher**, **Ubisoft Connect (Uplay)**, **EA App (EA Play / Origin)**, **Rockstar Games Launcher**, and **GOG Galaxy**.
 
 ---
 
@@ -11,7 +11,9 @@ Supports **Epic Games Launcher**, **Ubisoft Connect (Uplay)**, and **Rockstar Ga
 - 🕹️ **Multi-Platform Support**:
   - **Epic Games Launcher**: Automatically edits `.item` manifest JSON files (`InstallLocation`, `ManifestLocation`, etc.) and restores pending installs.
   - **Ubisoft Connect (Uplay)**: Automatically updates `HKLM\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs\<AppId>` and game configuration keys.
+  - **EA App / EA Play**: Updates `HKLM\SOFTWARE\WOW6432Node\EA Games\<Game>` and `Electronic Arts` registry paths (`Install Dir`).
   - **Rockstar Games Launcher**: Updates `HKLM\SOFTWARE\WOW6432Node\Rockstar Games\...` registry entries (`InstallFolderEpic` / `InstallFolder`) for titles like *Grand Theft Auto V* and *Red Dead Redemption 2*.
+  - **GOG Galaxy**: Updates `HKLM\SOFTWARE\WOW6432Node\GOG.com\Games\<GameId>` registry paths (`PATH`).
 - ⚡ **Bulk Drive Migration**: Swapped drives or changed drive letters (e.g., `D:` to `E:`)? Update all games across all launchers with a single command.
 - 🎮 **Interactive Menu**: User-friendly colored CLI menu to browse games, check status, and enter new paths.
 - 🛡️ **Safe & Non-Destructive**: Backs up manifests before editing (`.bak`), detects running launcher processes, and supports `-DryRun` simulation mode.
@@ -32,7 +34,8 @@ Open PowerShell (as Administrator) and run:
 # 1. List all detected games across all platforms & check disk status
 .\GameRelocator.ps1 -List
 
-# 2. Relocate a specific game (Ubisoft Connect or Epic Games)
+# 2. Relocate a specific game
+.\GameRelocator.ps1 -Game "Need for Speed" -NewPath "E:\Games\Need for Speed"
 .\GameRelocator.ps1 -Game "Watch_Dogs" -NewPath "E:\Games\Watch_Dogs"
 .\GameRelocator.ps1 -Game "Grand Theft Auto V Enhanced" -NewPath "E:\Games\GTAVEnhanced"
 
@@ -53,7 +56,7 @@ Open PowerShell (as Administrator) and run:
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `-List` | Switch | Lists all detected games across platforms, their paths, and disk status. |
-| `-Platform <Epic|Ubisoft|Rockstar|All>` | String | Filter games by platform (defaults to `All`). |
+| `-Platform <Epic|Ubisoft|EA|Rockstar|GOG|All>` | String | Filter games by platform (defaults to `All`). |
 | `-Game <Name/ID>` | String | Game display name, app name, or installation GUID. |
 | `-NewPath <Path>` | String | The target folder path on disk. |
 | `-OldDrive <Drive>` | String | Old drive letter (e.g. `D:` or `D`) for bulk updates. |
@@ -71,8 +74,14 @@ Epic Games stores installation data inside JSON manifests located at `C:\Program
 ### Ubisoft Connect (Uplay)
 Ubisoft Connect stores game installation directories in the Windows Registry under `HKLM\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs\<AppId>\InstallDir`. **Game Relocator** updates the corresponding AppID registry values and individual game configuration keys to the new folder.
 
+### EA App (EA Play / Origin)
+EA games store installation folders under `HKLM\SOFTWARE\WOW6432Node\EA Games\<Game>` and `Electronic Arts` (`Install Dir`). **Game Relocator** updates these paths to point to your new directory or drive.
+
 ### Rockstar Games Launcher
 Titles like *GTA V* and *Red Dead Redemption 2* store their installation directories under `HKLM\SOFTWARE\WOW6432Node\Rockstar Games\...` in values such as `InstallFolderEpic` and `InstallFolder`. **Game Relocator** keeps these synchronized with your launcher installations.
+
+### GOG Galaxy
+GOG games store installation paths under `HKLM\SOFTWARE\WOW6432Node\GOG.com\Games\<GameId>\PATH`. **Game Relocator** updates this directory seamlessly.
 
 ---
 

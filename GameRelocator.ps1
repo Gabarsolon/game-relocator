@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    Game Relocator - Easily change install paths or drive letters for PC games.
+    Game Relocator - Universal PC game installation and path relocator.
 
 .DESCRIPTION
-    A unified PowerShell tool that updates Epic Games Launcher manifests,
-    Ubisoft Connect (Uplay) registry configurations, and Rockstar Games Launcher
-    registries when game folders are moved or drive letters change.
+    A unified PowerShell tool that updates game manifests and registry configurations
+    across multiple PC gaming platforms (Epic Games, Ubisoft Connect, EA App / EA Play,
+    Rockstar Games, and GOG Galaxy) when game folders are moved or drive letters change.
 
 .PARAMETER List
     Lists all detected games across all platforms, their installation paths, and disk status.
 
 .PARAMETER Platform
-    Filter games by platform: 'All', 'Epic', 'Ubisoft', 'Rockstar'. Defaults to 'All'.
+    Filter games by platform: 'All', 'Epic', 'Ubisoft', 'EA', 'Rockstar', 'GOG'. Defaults to 'All'.
 
 .PARAMETER Game
     The name or ID/GUID of the game to relocate.
@@ -33,15 +33,15 @@
 
 .EXAMPLE
     .\GameRelocator.ps1 -List
-    Lists all detected games across Epic, Ubisoft, and Rockstar.
+    Lists all detected games across all supported platforms.
 
 .EXAMPLE
-    .\GameRelocator.ps1 -Game "Watch_Dogs" -NewPath "E:\Games\Watch_Dogs"
-    Relocates a single game.
+    .\GameRelocator.ps1 -Game "Need for Speed" -NewPath "E:\Games\Need for Speed"
+    Relocates an EA game.
 
 .EXAMPLE
     .\GameRelocator.ps1 -OldDrive "D:" -NewDrive "E:"
-    Batch updates all games across all launchers from drive D: to drive E:.
+    Batch updates all games across all platforms from drive D: to drive E:.
 
 .EXAMPLE
     .\GameRelocator.ps1
@@ -66,7 +66,7 @@ param(
     [string]$NewDrive,
 
     [Parameter()]
-    [ValidateSet('All', 'Epic', 'Ubisoft', 'Rockstar')]
+    [ValidateSet('All', 'Epic', 'Ubisoft', 'EA', 'Rockstar', 'GOG')]
     [string]$Platform = 'All',
 
     [Parameter()]
@@ -82,6 +82,9 @@ $EpicPendingDir  = 'C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests\Pending
 $UbisoftInstalls = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs'
 $UbisoftBase     = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft'
 $RockstarBase    = 'HKLM:\SOFTWARE\WOW6432Node\Rockstar Games'
+$EAGamesBase     = 'HKLM:\SOFTWARE\WOW6432Node\EA Games'
+$EAArtsBase      = 'HKLM:\SOFTWARE\WOW6432Node\Electronic Arts'
+$GOGBase         = 'HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games'
 
 function Write-Color([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::White) {
     Write-Host $Text -ForegroundColor $Color
@@ -90,14 +93,14 @@ function Write-Color([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::White
 function Write-Header {
     Write-Host ''
     Write-Color '============================================================' Cyan
-    Write-Color '           Universal Game Installation Relocator          ' Cyan
-    Write-Color '     [Epic Games | Ubisoft Connect | Rockstar Games]       ' Cyan
+    Write-Color '           Universal Game Installation Relocator            ' Cyan
+    Write-Color '    [Epic Games | Ubisoft | EA App | Rockstar | GOG]        ' Cyan
     Write-Color '============================================================' Cyan
     Write-Host ''
 }
 
 function Check-LaunchersRunning {
-    $procNames = @('EpicGamesLauncher', 'upc', 'Uplay', 'UbisoftGameLauncher', 'RockstarGamesLauncher', 'RockstarService')
+    $procNames = @('EpicGamesLauncher', 'upc', 'Uplay', 'UbisoftGameLauncher', 'RockstarGamesLauncher', 'RockstarService', 'EADesktop', 'Origin', 'GalaxyClient')
     $running = Get-Process -Name $procNames -ErrorAction SilentlyContinue
 
     if ($running) {
@@ -161,7 +164,6 @@ function Get-UbisoftGames {
     $games = @()
     if (-not (Test-Path $UbisoftInstalls)) { return $games }
 
-    # Map of known game names from HKLM:\SOFTWARE\WOW6432Node\Ubisoft\*
     $nameMap = @{}
     if (Test-Path $UbisoftBase) {
         $subkeys = Get-ChildItem -Path $UbisoftBase -ErrorAction SilentlyContinue
@@ -210,6 +212,41 @@ function Get-UbisoftGames {
     return $games
 }
 
+function Get-EAGames {
+    $games = @()
+    $ignoreKeys = @('EA Core', 'EA Desktop', 'EADM', 'Electronic Arts')
+
+    foreach ($basePath in @($EAGamesBase, $EAArtsBase)) {
+        if (Test-Path $basePath) {
+            $subkeys = Get-ChildItem -Path $basePath -ErrorAction SilentlyContinue
+            foreach ($sub in $subkeys) {
+                if ($sub.PSChildName -notin $ignoreKeys) {
+                    $props = Get-ItemProperty -Path $sub.PSPath -ErrorAction SilentlyContinue
+                    $loc = if ($props.'Install Dir') { $props.'Install Dir' } elseif ($props.InstallDir) { $props.InstallDir } else { $null }
+
+                    if ($loc) {
+                        $cleanPath = $loc.TrimEnd('\', '/')
+                        $dispName = if ($props.DisplayName) { $props.DisplayName } else { $sub.PSChildName }
+
+                        $games += [PSCustomObject]@{
+                            Id              = $sub.PSChildName
+                            Platform        = 'EA App'
+                            DisplayName     = $dispName
+                            InstallLocation = $cleanPath
+                            AppName         = $sub.PSChildName
+                            PathExists      = (Test-Path $cleanPath)
+                            IsPending       = $false
+                            ManifestFile    = $sub.PSPath
+                            RawData         = $props
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $games
+}
+
 function Get-RockstarStandaloneGames {
     $games = @()
     if (-not (Test-Path $RockstarBase)) { return $games }
@@ -239,11 +276,40 @@ function Get-RockstarStandaloneGames {
     return $games
 }
 
+function Get-GOGGames {
+    $games = @()
+    if (-not (Test-Path $GOGBase)) { return $games }
+
+    $subkeys = Get-ChildItem -Path $GOGBase -ErrorAction SilentlyContinue
+    foreach ($sub in $subkeys) {
+        $props = Get-ItemProperty -Path $sub.PSPath -ErrorAction SilentlyContinue
+        if ($props.PATH) {
+            $cleanPath = $props.PATH.TrimEnd('\', '/')
+            $dispName = if ($props.gameName) { $props.gameName } else { $sub.PSChildName }
+
+            $games += [PSCustomObject]@{
+                Id              = $sub.PSChildName
+                Platform        = 'GOG Galaxy'
+                DisplayName     = $dispName
+                InstallLocation = $cleanPath
+                AppName         = $sub.PSChildName
+                PathExists      = (Test-Path $cleanPath)
+                IsPending       = $false
+                ManifestFile    = $sub.PSPath
+                RawData         = $props
+            }
+        }
+    }
+    return $games
+}
+
 function Get-AllGames {
     $all = @()
     if ($Platform -in @('All', 'Epic')) { $all += Get-EpicGames }
     if ($Platform -in @('All', 'Ubisoft')) { $all += Get-UbisoftGames }
+    if ($Platform -in @('All', 'EA')) { $all += Get-EAGames }
     if ($Platform -in @('All', 'Rockstar')) { $all += Get-RockstarStandaloneGames }
+    if ($Platform -in @('All', 'GOG')) { $all += Get-GOGGames }
     return $all
 }
 
@@ -307,7 +373,6 @@ function Relocate-UbisoftGame([PSCustomObject]$GameObj, [string]$TargetLocation)
         }
     }
 
-    # Update corresponding game subkey if exists
     if (Test-Path $UbisoftBase) {
         $subkeys = Get-ChildItem -Path $UbisoftBase -ErrorAction SilentlyContinue
         foreach ($sub in $subkeys) {
@@ -328,6 +393,42 @@ function Relocate-UbisoftGame([PSCustomObject]$GameObj, [string]$TargetLocation)
                     }
                 }
             }
+        }
+    }
+}
+
+function Relocate-EAGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
+    $cleanTarget = $TargetLocation.TrimEnd('\', '/') + '\'
+    $regPath = $GameObj.ManifestFile
+
+    foreach ($prop in @('Install Dir', 'InstallDir')) {
+        if ($GameObj.RawData.PSObject.Properties[$prop]) {
+            if ($DryRun) {
+                Write-Color ("  [DryRun] Would set '" + $regPath + "\" + $prop + "' -> '" + $cleanTarget + "'") Cyan
+            } else {
+                try {
+                    Set-ItemProperty -Path $regPath -Name $prop -Value $cleanTarget -ErrorAction Stop
+                    Write-Color ("  [+] Updated EA key '" + $GameObj.Id + "\" + $prop + "' -> " + $cleanTarget) Green
+                } catch {
+                    Write-Color ("  [-] Failed to update registry (requires admin): " + $_.Exception.Message) Yellow
+                }
+            }
+        }
+    }
+}
+
+function Relocate-GOGGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
+    $cleanTarget = $TargetLocation.TrimEnd('\', '/')
+    $regPath = $GameObj.ManifestFile
+
+    if ($DryRun) {
+        Write-Color ("  [DryRun] Would set '" + $regPath + "\PATH' -> '" + $cleanTarget + "'") Cyan
+    } else {
+        try {
+            Set-ItemProperty -Path $regPath -Name "PATH" -Value $cleanTarget -ErrorAction Stop
+            Write-Color ("  [+] Updated GOG key '" + $GameObj.Id + "\PATH' -> " + $cleanTarget) Green
+        } catch {
+            Write-Color ("  [-] Failed to update registry (requires admin): " + $_.Exception.Message) Yellow
         }
     }
 }
@@ -385,7 +486,9 @@ function Relocate-Game([PSCustomObject]$GameObj, [string]$TargetLocation) {
     switch ($GameObj.Platform) {
         'Epic Games'      { Relocate-EpicGame -GameObj $GameObj -TargetLocation $cleanTarget }
         'Ubisoft Connect' { Relocate-UbisoftGame -GameObj $GameObj -TargetLocation $cleanTarget }
+        'EA App'          { Relocate-EAGame -GameObj $GameObj -TargetLocation $cleanTarget }
         'Rockstar Games'  { Update-RockstarRegistry -OldPath $oldLocation -NewPath $cleanTarget }
+        'GOG Galaxy'      { Relocate-GOGGame -GameObj $GameObj -TargetLocation $cleanTarget }
     }
 
     Write-Color ("  [OK] Relocation complete for '" + $GameObj.DisplayName + "'.") Green
