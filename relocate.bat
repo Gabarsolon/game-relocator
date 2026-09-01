@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\EpicGameRelocator.ps1" %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\GameRelocator.ps1" %*
 pause
