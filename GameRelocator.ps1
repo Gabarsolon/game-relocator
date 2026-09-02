@@ -66,7 +66,7 @@ param(
     [string]$NewDrive,
 
     [Parameter()]
-    [ValidateSet('All', 'Epic', 'Ubisoft', 'EA', 'Rockstar', 'GOG')]
+    [ValidateSet('All', 'Epic', 'Ubisoft', 'EA', 'Wargaming', 'Rockstar', 'GOG')]
     [string]$Platform = 'All',
 
     [Parameter()]
@@ -85,6 +85,7 @@ $RockstarBase    = 'HKLM:\SOFTWARE\WOW6432Node\Rockstar Games'
 $EAGamesBase     = 'HKLM:\SOFTWARE\WOW6432Node\EA Games'
 $EAArtsBase      = 'HKLM:\SOFTWARE\WOW6432Node\Electronic Arts'
 $GOGBase         = 'HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games'
+$WGCPreferences  = 'C:\ProgramData\Wargaming.net\GameCenter\preferences.xml'
 
 function Write-Color([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::White) {
     Write-Host $Text -ForegroundColor $Color
@@ -94,13 +95,13 @@ function Write-Header {
     Write-Host ''
     Write-Color '============================================================' Cyan
     Write-Color '           Universal Game Installation Relocator            ' Cyan
-    Write-Color '    [Epic Games | Ubisoft | EA App | Rockstar | GOG]        ' Cyan
+    Write-Color '    [Epic | Ubisoft | EA App | Wargaming | Rockstar | GOG]        ' Cyan
     Write-Color '============================================================' Cyan
     Write-Host ''
 }
 
 function Check-LaunchersRunning {
-    $procNames = @('EpicGamesLauncher', 'upc', 'Uplay', 'UbisoftGameLauncher', 'RockstarGamesLauncher', 'RockstarService', 'EADesktop', 'Origin', 'GalaxyClient')
+    $procNames = @('EpicGamesLauncher', 'upc', 'Uplay', 'UbisoftGameLauncher', 'RockstarGamesLauncher', 'RockstarService', 'EADesktop', 'Origin', 'GalaxyClient', 'wgc')
     $running = Get-Process -Name $procNames -ErrorAction SilentlyContinue
 
     if ($running) {
@@ -247,6 +248,80 @@ function Get-EAGames {
     return $games
 }
 
+
+function Get-WargamingGames {
+    $games = @()
+    $trackedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    if (Test-Path $WGCPreferences) {
+        try {
+            [xml]$xml = Get-Content $WGCPreferences -Raw
+            $nodes = $xml.SelectNodes("//games_manager/games/game/game_instance_path | //games_manager/selectedGames/game/game_instance_path")
+            foreach ($node in $nodes) {
+                $p = $node.InnerText
+                if ($p -and $trackedPaths.Add($p)) {
+                    $cleanPath = $p.TrimEnd('\', '/')
+                    $dispName = Split-Path $cleanPath -Leaf
+                    $gameInfo = Join-Path $cleanPath "game_info.xml"
+                    if (Test-Path $gameInfo) {
+                        try {
+                            [xml]$gXml = Get-Content $gameInfo -Raw
+                            $id = $gXml.SelectSingleNode("//game/id").InnerText
+                            if ($id -like "*WOT*") { $dispName = "World of Tanks EU" }
+                            elseif ($id -like "*WOWS*") { $dispName = "World of Warships" }
+                            elseif ($id -like "*WOWP*") { $dispName = "World of Warplanes" }
+                        } catch {}
+                    }
+
+                    $games += [PSCustomObject]@{
+                        Id              = $dispName
+                        Platform        = 'Wargaming'
+                        DisplayName     = $dispName
+                        InstallLocation = $cleanPath
+                        AppName         = $dispName
+                        PathExists      = (Test-Path $cleanPath)
+                        IsPending       = $false
+                        ManifestFile    = $WGCPreferences
+                        RawData         = $p
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    $uninstPaths = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+    )
+    foreach ($uPath in $uninstPaths) {
+        if (Test-Path $uPath) {
+            $subkeys = Get-ChildItem -Path $uPath -ErrorAction SilentlyContinue
+            foreach ($sub in $subkeys) {
+                $props = Get-ItemProperty -Path $sub.PSPath -ErrorAction SilentlyContinue
+                if ($props.Publisher -eq 'Wargaming.net' -and $props.InstallLocation) {
+                    $p = $props.InstallLocation.TrimEnd('\', '/')
+                    if ($trackedPaths.Add($p)) {
+                        $dispName = if ($props.DisplayName) { $props.DisplayName } else { Split-Path $p -Leaf }
+                        $games += [PSCustomObject]@{
+                            Id              = $sub.PSChildName
+                            Platform        = 'Wargaming'
+                            DisplayName     = $dispName
+                            InstallLocation = $p
+                            AppName         = $dispName
+                            PathExists      = (Test-Path $p)
+                            IsPending       = $false
+                            ManifestFile    = $sub.PSPath
+                            RawData         = $props
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $games
+}
+
 function Get-RockstarStandaloneGames {
     $games = @()
     if (-not (Test-Path $RockstarBase)) { return $games }
@@ -308,6 +383,7 @@ function Get-AllGames {
     if ($Platform -in @('All', 'Epic')) { $all += Get-EpicGames }
     if ($Platform -in @('All', 'Ubisoft')) { $all += Get-UbisoftGames }
     if ($Platform -in @('All', 'EA')) { $all += Get-EAGames }
+    if ($Platform -in @('All', 'Wargaming')) { $all += Get-WargamingGames }
     if ($Platform -in @('All', 'Rockstar')) { $all += Get-RockstarStandaloneGames }
     if ($Platform -in @('All', 'GOG')) { $all += Get-GOGGames }
     return $all
@@ -417,6 +493,77 @@ function Relocate-EAGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
     }
 }
 
+
+function Relocate-WargamingGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
+    $cleanTarget = $TargetLocation.TrimEnd('\', '/')
+    $oldPath     = $GameObj.InstallLocation
+
+    if (Test-Path $WGCPreferences) {
+        if ($DryRun) {
+            Write-Color ("  [DryRun] Would update Wargaming GameCenter preferences.xml path: '" + $oldPath + "' -> '" + $cleanTarget + "'") Cyan
+        } else {
+            try {
+                Copy-Item -Path $WGCPreferences -Destination ($WGCPreferences + ".bak") -Force -ErrorAction SilentlyContinue
+                [xml]$xml = Get-Content $WGCPreferences -Raw
+                $nodes = $xml.SelectNodes("//games_manager/games/game/game_instance_path | //games_manager/selectedGames/game/game_instance_path")
+                $matched = $false
+                foreach ($n in $nodes) {
+                    if ($n.InnerText.TrimEnd('\', '/') -eq $oldPath.TrimEnd('\', '/')) {
+                        $n.InnerText = $cleanTarget
+                        $matched = $true
+                    }
+                }
+                if (-not $matched) {
+                    $gm = $xml.SelectSingleNode("//games_manager")
+                    if ($gm) {
+                        $gamesNode = $gm.SelectSingleNode("games")
+                        if (-not $gamesNode) { $gamesNode = $gm.AppendChild($xml.CreateElement("games")) }
+                        $g = $gamesNode.AppendChild($xml.CreateElement("game"))
+                        $gip = $g.AppendChild($xml.CreateElement("game_instance_path"))
+                        $gip.InnerText = $cleanTarget
+                    }
+                }
+                $xml.Save($WGCPreferences)
+                Write-Color ("  [+] Updated Wargaming Game Center preferences: " + $WGCPreferences) Green
+            } catch {
+                Write-Color ("  [-] Error updating preferences.xml: " + $_.Exception.Message) Yellow
+            }
+        }
+    }
+
+    $uninstPaths = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+    )
+    foreach ($uPath in $uninstPaths) {
+        if (Test-Path $uPath) {
+            $subkeys = Get-ChildItem -Path $uPath -ErrorAction SilentlyContinue
+            foreach ($sub in $subkeys) {
+                $p = Get-ItemProperty -Path $sub.PSPath -ErrorAction SilentlyContinue
+                if ($p.Publisher -eq 'Wargaming.net' -and $p.InstallLocation -and ($p.InstallLocation.TrimEnd('\', '/') -eq $oldPath.TrimEnd('\', '/'))) {
+                    if ($DryRun) {
+                        Write-Color ("  [DryRun] Would update uninstall registry: " + $sub.PSPath) Cyan
+                    } else {
+                        try {
+                            Set-ItemProperty -Path $sub.PSPath -Name "InstallLocation" -Value $cleanTarget -ErrorAction Stop
+                            if ($p.UninstallString) {
+                                $newUninst = $p.UninstallString -replace [regex]::Escape($oldPath), $cleanTarget
+                                Set-ItemProperty -Path $sub.PSPath -Name "UninstallString" -Value $newUninst -ErrorAction Stop
+                            }
+                            if ($p.DisplayIcon) {
+                                $newIcon = $p.DisplayIcon -replace [regex]::Escape($oldPath), $cleanTarget
+                                Set-ItemProperty -Path $sub.PSPath -Name "DisplayIcon" -Value $newIcon -ErrorAction Stop
+                            }
+                            Write-Color ("  [+] Updated Wargaming uninstall registry: " + $sub.PSChildName) Green
+                        } catch {}
+                    }
+                }
+            }
+        }
+    }
+}
+
 function Relocate-GOGGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
     $cleanTarget = $TargetLocation.TrimEnd('\', '/')
     $regPath = $GameObj.ManifestFile
@@ -487,6 +634,7 @@ function Relocate-Game([PSCustomObject]$GameObj, [string]$TargetLocation) {
         'Epic Games'      { Relocate-EpicGame -GameObj $GameObj -TargetLocation $cleanTarget }
         'Ubisoft Connect' { Relocate-UbisoftGame -GameObj $GameObj -TargetLocation $cleanTarget }
         'EA App'          { Relocate-EAGame -GameObj $GameObj -TargetLocation $cleanTarget }
+        'Wargaming'       { Relocate-WargamingGame -GameObj $GameObj -TargetLocation $cleanTarget }
         'Rockstar Games'  { Update-RockstarRegistry -OldPath $oldLocation -NewPath $cleanTarget }
         'GOG Galaxy'      { Relocate-GOGGame -GameObj $GameObj -TargetLocation $cleanTarget }
     }
