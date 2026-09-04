@@ -65,6 +65,15 @@ param(
     [Parameter(ParameterSetName = 'BulkDrive', Mandatory = $true)]
     [string]$NewDrive,
 
+    [Parameter(ParameterSetName = 'Unregister', Mandatory = $true)]
+    [switch]$Unregister,
+
+    [Parameter(ParameterSetName = 'Unregister', Mandatory = $true)]
+    [string]$TargetGame,
+
+    [Parameter(ParameterSetName = 'CleanGhosts')]
+    [switch]$CleanGhosts,
+
     [Parameter()]
     [ValidateSet('All', 'Epic', 'Ubisoft', 'EA', 'Wargaming', 'Rockstar', 'GOG')]
     [string]$Platform = 'All',
@@ -611,6 +620,90 @@ function Update-RockstarRegistry([string]$OldPath, [string]$NewPath) {
     }
 }
 
+
+function Unregister-Game([PSCustomObject]$GameObj) {
+    Write-Color ("`n[*] Unregistering / Removing ghost manifest for [" + $GameObj.Platform + "] '" + $GameObj.DisplayName + "'...") Yellow
+    Write-Color ("    Registered Path : " + $GameObj.InstallLocation) Gray
+
+    if ($DryRun) {
+        Write-Color ("  [DryRun] Would unregister/remove manifest: " + $GameObj.ManifestFile) Cyan
+        return
+    }
+
+    switch ($GameObj.Platform) {
+        'Epic Games' {
+            if (Test-Path $GameObj.ManifestFile) {
+                Copy-Item -Path $GameObj.ManifestFile -Destination ($GameObj.ManifestFile + ".bak") -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path $GameObj.ManifestFile -Force -ErrorAction SilentlyContinue
+                Write-Color ("  [+] Removed Epic manifest: " + $GameObj.ManifestFile) Green
+            }
+            $pendingCopy = Join-Path $EpicPendingDir ($GameObj.Id + ".item")
+            if (Test-Path $pendingCopy) {
+                Remove-Item -Path $pendingCopy -Force -ErrorAction SilentlyContinue
+                Write-Color ("  [+] Removed pending manifest: " + $pendingCopy) Green
+            }
+        }
+        'Ubisoft Connect' {
+            $appId = $GameObj.Id
+            $installKey = "$UbisoftInstalls\$appId"
+            if (Test-Path $installKey) {
+                try {
+                    Remove-Item -Path $installKey -Recurse -Force -ErrorAction Stop
+                    Write-Color ("  [+] Removed Ubisoft App " + $appId + " registry key") Green
+                } catch {
+                    Write-Color ("  [-] Registry removal failed (requires admin): " + $_.Exception.Message) Yellow
+                }
+            }
+        }
+        'EA App' {
+            $regPath = $GameObj.ManifestFile
+            if (Test-Path $regPath) {
+                try {
+                    Remove-Item -Path $regPath -Recurse -Force -ErrorAction Stop
+                    Write-Color ("  [+] Removed EA Game registry key: " + $regPath) Green
+                } catch {
+                    Write-Color ("  [-] Registry removal failed (requires admin): " + $_.Exception.Message) Yellow
+                }
+            }
+        }
+        'Wargaming' {
+            if (Test-Path $WGCPreferences) {
+                try {
+                    Copy-Item -Path $WGCPreferences -Destination ($WGCPreferences + ".bak") -Force -ErrorAction SilentlyContinue
+                    [xml]$xml = Get-Content $WGCPreferences -Raw
+                    $nodes = $xml.SelectNodes("//games_manager/games/game[game_instance_path='" + $GameObj.InstallLocation + "'] | //games_manager/selectedGames/game[game_instance_path='" + $GameObj.InstallLocation + "']")
+                    foreach ($n in $nodes) {
+                        [void]$n.ParentNode.RemoveChild($n)
+                    }
+                    $xml.Save($WGCPreferences)
+                    Write-Color ("  [+] Removed game entry from Wargaming Game Center preferences") Green
+                } catch {}
+            }
+        }
+        'GOG Galaxy' {
+            $regPath = $GameObj.ManifestFile
+            if (Test-Path $regPath) {
+                try {
+                    Remove-Item -Path $regPath -Recurse -Force -ErrorAction Stop
+                    Write-Color ("  [+] Removed GOG registry key: " + $regPath) Green
+                } catch {}
+            }
+        }
+        'Rockstar Games' {
+            $regPath = $GameObj.ManifestFile
+            if (Test-Path $regPath) {
+                try {
+                    Remove-ItemProperty -Path $regPath -Name "InstallFolder" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path $regPath -Name "InstallFolderEpic" -ErrorAction SilentlyContinue
+                    Write-Color ("  [+] Cleared Rockstar game install path registry") Green
+                } catch {}
+            }
+        }
+    }
+
+    Write-Color ("  [OK] Game unregistered. The launcher will now treat '" + $GameObj.DisplayName + "' as uninstalled and allow fresh installation.") Green
+}
+
 function Relocate-Game([PSCustomObject]$GameObj, [string]$TargetLocation) {
     $cleanTarget = $TargetLocation.TrimEnd('\', '/')
     $oldLocation = $GameObj.InstallLocation
@@ -666,6 +759,64 @@ if ($List) {
         $index++
     }
     Write-Host ('-' * 90)
+    return
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'Unregister') {
+    $searchTarget = if ($TargetGame) { $TargetGame } else { $Game }
+    $match = $allGames | Where-Object {
+        $_.DisplayName -like "*$searchTarget*" -or $_.Id -eq $searchTarget -or $_.AppName -eq $searchTarget
+    }
+
+    if (-not $match) {
+        Write-Color ("[-] Error: Could not find any game matching '" + $searchTarget + "'.") Red
+        return
+    }
+
+    if ($match.Count -gt 1) {
+        Write-Color ("[!] Multiple games matched '" + $searchTarget + "'. Please specify exact name, ID, or Platform:") Yellow
+        foreach ($m in $match) {
+            Write-Color ("    - [" + $m.Platform + "] " + $m.DisplayName + " (" + $m.Id + ")") Gray
+        }
+        return
+    }
+
+    if (-not $Force -and -not $DryRun) {
+        $ans = Read-Host ("`nAre you sure you want to unregister '" + $match[0].DisplayName + "' from " + $match[0].Platform + "? (Y/N)")
+        if ($ans -notmatch '^[Yy]') {
+            Write-Color 'Aborted by user.' Yellow
+            return
+        }
+    }
+
+    Unregister-Game -GameObj $match[0]
+    return
+}
+
+if ($CleanGhosts) {
+    $ghosts = $allGames | Where-Object { -not $_.PathExists }
+
+    if ($ghosts.Count -eq 0) {
+        Write-Color "[+] No ghost or missing game installations detected! All registered games exist on disk." Green
+        return
+    }
+
+    Write-Color ("Found " + $ghosts.Count + " ghost/missing game(s):") Yellow
+    foreach ($g in $ghosts) {
+        Write-Color ("  - [" + $g.Platform + "] " + $g.DisplayName + " (" + $g.InstallLocation + ")") Gray
+    }
+
+    if (-not $Force -and -not $DryRun) {
+        $ans = Read-Host "`nDo you want to unregister and remove all these ghost manifests? (Y/N)"
+        if ($ans -notmatch '^[Yy]') {
+            Write-Color 'Aborted by user.' Yellow
+            return
+        }
+    }
+
+    foreach ($g in $ghosts) {
+        Unregister-Game -GameObj $g
+    }
     return
 }
 
@@ -736,7 +887,9 @@ if ($PSCmdlet.ParameterSetName -eq 'Interactive') {
     Write-Color 'Select an option:' White
     Write-Color '  [1] Relocate a single game' Cyan
     Write-Color '  [2] Bulk replace a drive letter across all games (e.g. D: -> E:)' Cyan
-    Write-Color '  [3] List all installed games and health check' Cyan
+    Write-Color '  [3] Clean / Unregister a ghost or stuck game (Fixes install/reinstall blocked)' Yellow
+    Write-Color '  [4] Auto-clean all missing/ghost games from launchers' Yellow
+    Write-Color '  [5] List all installed games and health check' Cyan
     Write-Color '  [Q] Quit' Gray
 
     $choice = Read-Host "`nChoice"
@@ -779,6 +932,36 @@ if ($PSCmdlet.ParameterSetName -eq 'Interactive') {
             & $PSCommandPath -OldDrive $from -NewDrive $to
         }
         '3' {
+            Write-Host "`nSelect a game to unregister/clean:"
+            for ($i = 0; $i -lt $allGames.Count; $i++) {
+                $g = $allGames[$i]
+                $statusColor = if ($g.PathExists) { 'Green' } else { 'Red' }
+                $statusStr = if ($g.PathExists) { 'Ready' } else { 'Ghost/Missing' }
+                Write-Host ('  [{0,2}] ' -f ($i + 1)) -NoNewline
+                Write-Host ('[{0,-15}] ' -f $g.Platform) -ForegroundColor Cyan -NoNewline
+                Write-Host ('{0,-30} ' -f $g.DisplayName) -NoNewline
+                Write-Host ('[{0}] ' -f $statusStr) -ForegroundColor $statusColor -NoNewline
+                Write-Host ('(' + $g.InstallLocation + ')') -ForegroundColor Gray
+            }
+
+            $sel = Read-Host "`nEnter game number"
+            $selIndex = [int]$sel - 1
+            if ($selIndex -ge 0 -and $selIndex -lt $allGames.Count) {
+                $targetGame = $allGames[$selIndex]
+                $confirm = Read-Host ("`nAre you sure you want to remove manifest for '" + $targetGame.DisplayName + "'? (Y/N)")
+                if ($confirm -match '^[Yy]') {
+                    Unregister-Game -GameObj $targetGame
+                } else {
+                    Write-Color 'Cancelled.' Yellow
+                }
+            } else {
+                Write-Color '[-] Invalid selection.' Red
+            }
+        }
+        '4' {
+            & $PSCommandPath -CleanGhosts
+        }
+        '5' {
             & $PSCommandPath -List
         }
         Default {
