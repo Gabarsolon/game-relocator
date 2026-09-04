@@ -88,6 +88,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $EpicManifestDir = 'C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests'
 $EpicPendingDir  = 'C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests\Pending'
+$EpicEOSItems    = 'C:\ProgramData\Epic\EpicOnlineServicesShared\InstallHelper\InstalledItems'
 $UbisoftInstalls = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs'
 $UbisoftBase     = 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft'
 $RockstarBase    = 'HKLM:\SOFTWARE\WOW6432Node\Rockstar Games'
@@ -435,6 +436,23 @@ function Relocate-EpicGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
             Remove-Item -Path $GameObj.ManifestFile -Force -ErrorAction SilentlyContinue
             Write-Color ("  [+] Removed pending manifest: " + $GameObj.ManifestFile) Green
         }
+
+        # Update Epic Online Services Shared .egi item if present
+        $egiFile = Join-Path $EpicEOSItems ($guid + ".egi")
+        if (Test-Path $egiFile) {
+            try {
+                $egiRaw = Get-Content $egiFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($egiRaw.v4) {
+                    $egiRaw.v4.dir = $cleanTarget
+                    $egiRaw.v4.metaDir = "$cleanTarget\.egstore"
+                    $egiRaw.v4.manifestPath = "$cleanTarget\.egstore\$guid.manifest"
+                    $egiRaw.v4.pendingManifestPath = "$cleanTarget\.egstore\Pending\$guid.manifest"
+                    $egiJson = $egiRaw | ConvertTo-Json -Depth 10 -Compress
+                    Set-Content -Path $egiFile -Value $egiJson -Encoding UTF8 -Force
+                    Write-Color ("  [+] Updated Epic Online Services .egi: " + $egiFile) Green
+                }
+            } catch {}
+        }
     }
 
     # Also update Rockstar registry if GTA/RDR title
@@ -651,6 +669,16 @@ function Unregister-Game([PSCustomObject]$GameObj) {
                 Remove-Item -Path $pendingCopy -Force -ErrorAction SilentlyContinue
                 Write-Color ("  [+] Removed pending manifest: " + $pendingCopy) Green
             }
+
+            # Remove EOS Shared .egi tracking file
+            $egiFile = Join-Path $EpicEOSItems ($GameObj.Id + ".egi")
+            if (Test-Path $egiFile) {
+                Remove-Item -Path $egiFile -Force -ErrorAction SilentlyContinue
+                Write-Color ("  [+] Removed Epic Online Services .egi record: " + $egiFile) Green
+            }
+
+            # Remove offline cache .dat files
+            Get-ChildItem -Path "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\Data" -Filter "OC_*.dat" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             # 3. Clean AppId from GameUserSettings.ini
             $iniPath = "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\Config\WindowsEditor\GameUserSettings.ini"
