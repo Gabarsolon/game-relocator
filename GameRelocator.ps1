@@ -632,6 +632,15 @@ function Unregister-Game([PSCustomObject]$GameObj) {
 
     switch ($GameObj.Platform) {
         'Epic Games' {
+            # 1. Close launcher processes if running so it doesn't recreate the manifest from memory
+            $epicProcs = Get-Process -Name 'EpicGamesLauncher' -ErrorAction SilentlyContinue
+            if ($epicProcs) {
+                $epicProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 500
+                Write-Color "  [+] Closed Epic Games Launcher process" Green
+            }
+
+            # 2. Remove manifest and pending files
             if (Test-Path $GameObj.ManifestFile) {
                 Copy-Item -Path $GameObj.ManifestFile -Destination ($GameObj.ManifestFile + ".bak") -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path $GameObj.ManifestFile -Force -ErrorAction SilentlyContinue
@@ -642,6 +651,21 @@ function Unregister-Game([PSCustomObject]$GameObj) {
                 Remove-Item -Path $pendingCopy -Force -ErrorAction SilentlyContinue
                 Write-Color ("  [+] Removed pending manifest: " + $pendingCopy) Green
             }
+
+            # 3. Clean AppId from GameUserSettings.ini
+            $iniPath = "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\Config\WindowsEditor\GameUserSettings.ini"
+            if (Test-Path $iniPath -and $GameObj.AppName) {
+                try {
+                    $lines = Get-Content $iniPath
+                    $filtered = $lines | Where-Object { $_ -notmatch [regex]::Escape($GameObj.AppName) }
+                    Set-Content -Path $iniPath -Value $filtered -Encoding UTF8
+                    Write-Color "  [+] Cleaned launcher settings cache" Green
+                } catch {}
+            }
+
+            # 4. Clear webcache to flush UI cache
+            Get-ChildItem -Path "$env:LOCALAPPDATA\EpicGamesLauncher\Saved" -Filter "*webcache*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Color "  [+] Cleared Epic Games UI web cache" Green
         }
         'Ubisoft Connect' {
             $appId = $GameObj.Id
