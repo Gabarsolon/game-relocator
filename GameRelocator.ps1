@@ -46,6 +46,9 @@
 .EXAMPLE
     .\GameRelocator.ps1
     Launches the interactive menu.
+
+.NOTES
+    Version: 1.1.0
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'Interactive')]
@@ -108,6 +111,16 @@ function Write-Header {
     Write-Color '    [Epic | Ubisoft | EA App | Wargaming | Rockstar | GOG]        ' Cyan
     Write-Color '============================================================' Cyan
     Write-Host ''
+}
+
+# Writes a file as UTF-8 *without* a BOM.
+# PowerShell 5.1's `Set-Content -Encoding UTF8` prepends a UTF-8 BOM (EF BB BF),
+# which breaks strict JSON parsers. Epic's EOSH install helper fails to parse a
+# BOM-prefixed .egi/.item manifest and then reports the game as "not installed",
+# causing the launcher to delete the manifest on the next start.
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
 function Check-LaunchersRunning {
@@ -429,7 +442,7 @@ function Relocate-EpicGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
         }
 
         $newJsonText = $json | ConvertTo-Json -Depth 10
-        Set-Content -Path $destFile -Value $newJsonText -Encoding UTF8 -Force
+        Write-Utf8NoBom -Path $destFile -Content $newJsonText
         Write-Color ("  [+] Saved Epic manifest: " + $destFile) Green
 
         if ($GameObj.IsPending -and (Test-Path $GameObj.ManifestFile)) {
@@ -448,7 +461,7 @@ function Relocate-EpicGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
                     $egiRaw.v4.manifestPath = "$cleanTarget\.egstore\$guid.manifest"
                     $egiRaw.v4.pendingManifestPath = "$cleanTarget\.egstore\Pending\$guid.manifest"
                     $egiJson = $egiRaw | ConvertTo-Json -Depth 10 -Compress
-                    Set-Content -Path $egiFile -Value $egiJson -Encoding UTF8 -Force
+                    Write-Utf8NoBom -Path $egiFile -Content $egiJson
                     Write-Color ("  [+] Updated Epic Online Services .egi: " + $egiFile) Green
                 }
             } catch {}
@@ -686,7 +699,7 @@ function Unregister-Game([PSCustomObject]$GameObj) {
                 try {
                     $lines = Get-Content $iniPath
                     $filtered = $lines | Where-Object { $_ -notmatch [regex]::Escape($GameObj.AppName) }
-                    Set-Content -Path $iniPath -Value $filtered -Encoding UTF8
+                    Write-Utf8NoBom -Path $iniPath -Content ($filtered -join "`r`n")
                     Write-Color "  [+] Cleaned launcher settings cache" Green
                 } catch {}
             }
