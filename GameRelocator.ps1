@@ -448,6 +448,14 @@ function Relocate-EpicGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
         if ($GameObj.IsPending -and (Test-Path $GameObj.ManifestFile)) {
             Remove-Item -Path $GameObj.ManifestFile -Force -ErrorAction SilentlyContinue
             Write-Color ("  [+] Removed pending manifest: " + $GameObj.ManifestFile) Green
+
+            # If pending manifest in .egstore exists, promote it to main manifest
+            $pendingEgstore = "$cleanTarget\.egstore\Pending\$guid.manifest"
+            $mainEgstore    = "$cleanTarget\.egstore\$guid.manifest"
+            if ((Test-Path $pendingEgstore) -and (-not (Test-Path $mainEgstore) -or ((Get-Item $pendingEgstore).Length -gt 0))) {
+                Copy-Item -Path $pendingEgstore -Destination $mainEgstore -Force -ErrorAction SilentlyContinue
+                Write-Color ("  [+] Promoted pending .egstore manifest to active: " + $mainEgstore) Green
+            }
         }
 
         # Update Epic Online Services Shared .egi item if present
@@ -460,6 +468,17 @@ function Relocate-EpicGame([PSCustomObject]$GameObj, [string]$TargetLocation) {
                     $egiRaw.v4.metaDir = "$cleanTarget\.egstore"
                     $egiRaw.v4.manifestPath = "$cleanTarget\.egstore\$guid.manifest"
                     $egiRaw.v4.pendingManifestPath = "$cleanTarget\.egstore\Pending\$guid.manifest"
+                    $egiRaw.v4.state = "Installed"
+                    if ($egiRaw.v4.pendingManifestData -and $egiRaw.v4.pendingManifestData.version) {
+                        $egiRaw.v4.manifestData = $egiRaw.v4.pendingManifestData
+                        $egiRaw.v4.pendingManifestData = [PSCustomObject]@{
+                            version = ""
+                            launchCommand = ""
+                            launchExe = ""
+                            prereqSHA1Hash = ""
+                            buildSize = 0
+                        }
+                    }
                     $egiJson = $egiRaw | ConvertTo-Json -Depth 10 -Compress
                     Write-Utf8NoBom -Path $egiFile -Content $egiJson
                     Write-Color ("  [+] Updated Epic Online Services .egi: " + $egiFile) Green
